@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>US Counties Asthma & Air Pollution Scenarios</title>
+
+<!-- Google Fonts - decided to use Lato for a cleaner look -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Lato:wght@400;700&display=swap" rel="stylesheet">
+
+<!-- Styles -->
+<style>
+    body {
+        font-family: 'Lato', sans-serif;
+        margin: 20px;
+        background-color: #f9f9f9;
+    }
+
+    h1 { margin-bottom: 5px; }
+    
+    .container { max-width: 1200px; margin: 0 auto; }
+    
+    .panel {
+        background: white;
+        border: 1px solid #eee;
+        border-radius: 12px;
+        padding: 16px;
+        box-shadow: 0 2px 8px rgba(0,0,0,.04);
+    }
+
+    .controls {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 15px;
+        align-items: end;
+        margin-bottom: 20px;
+        background: white;
+        padding: 15px;
+        border-radius: 8px;
+        border: 1px solid #ddd;
+    }
+    @media(min-width: 900px){
+        .controls { grid-template-columns: 1fr 1fr 1fr; }
+    }
+
+    label {
+        font-weight: 700;
+        font-size: 14px;
+        display: block;
+        margin-bottom: 6px;
+    }
+    
+    select, input[type=range] { width: 100%; }
+
+    .row {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 18px;
+    }
+    @media(min-width: 1100px){
+        .row { grid-template-columns: 1.2fr 0.8fr; }
+    }
+
+    #map-container, #distplot { width: 100%; height: 600px; position: relative; }
+
+    /* Tooltip Stuff */
+    .tooltip {
+        position: absolute;
+        text-align: left;
+        width: auto;
+        padding: 10px;
+        font-size: 12px;
+        font-family: 'Lato', sans-serif;
+        background: white;
+        border: 1px solid #999;
+        border-radius: 5px;
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity 0.1s ease;
+        box-shadow: 0 4px 14px rgba(0,0,0,.1);
+        z-index: 999;
+    }
+
+    /* Map Styles */
+    .county-path {
+        stroke: #fff;
+        stroke-width: 0.2px;
+        transition: fill 0.3s ease; /* Smooth color transition on filter */
+    }
+    .county-path:hover {
+        stroke: #333;
+        stroke-width: 1.5px;
+        cursor: pointer;
+    }
+
+    .legend {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-top: 8px;
+        font-size: 12px;
+    }
+    .badge {
+        display: inline-block;
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        border: 1px solid #ddd;
+        margin-right: 4px;
+    }
+    .badge.low { background: #ffdd57; } /* Yellow */
+    .badge.medium { background: #ff7f0e; } /* Orange */
+    .badge.high { background: #d62728; } /* Red */
+    .badge.nodata { background: #eee; border: 1px solid #ccc; }
+
+    .small-note { font-size: 12px; color: #777; margin-top: 4px; }
+</style>
+</head>
+<body>
+
+<div class="container">
+    <h1>Asthma Risk & Air Pollution Scenarios in the Continental US</h1>
+    <p style="color:#666;font-size:14px; margin-top:0;">
+        <b>Figure 1:</b> Counties colored by Asthma Category. Hover to see county, state, and predicted Asthma risk.<br>
+        <b>Figure 2:</b> Distribution of selected variable across counties.
+    </p>
+
+    <div class="controls">
+        <div>
+            <label for="pollutant">Target Variable</label>
+            <select id="pollutant"></select>
+            <div class="small-note">Selects data for the chart and tooltip.</div>
+        </div>
+
+        <div>
+            <label for="pct">Filter: Asthma Percentile</label>
+            <input id="pct" type="range" min="0" max="95" step="5" value="0"/>
+            <div class="small-note">
+                Showing counties with prevalence ≥ <span id="pctLabel">0</span>th percentile.
+                (<span id="shownCount">0</span> counties)
+            </div>
+        </div>
+
+        <div>
+            <label for="scenario">"What If" Reduction (%)</label>
+            <input id="scenario" type="range" min="0" max="50" step="10" value="0"/>
+            <div class="small-note">
+                Reduces selected variable by <span id="scenarioLabel">0</span>% & updates classifications.
+            </div>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="panel">
+            <div id="map-container"></div>
+            <div class="legend">
+                <strong>Asthma Category:</strong>
+                <div><span class="badge low"></span> Low</div>
+                <div><span class="badge medium"></span> Medium</div>
+                <div><span class="badge high"></span> High</div>
+                <div><span class="badge nodata"></span> Filtered / No Data</div>
+            </div>
+        </div>
+
+        <div class="panel">
+            <div id="distplot"></div>
+        </div>
+    </div>
+</div>
+
+<div id="tooltip" class="tooltip"></div>
+
+<script src="../lib/d3.v5.min.js"></script>
+<script src="../lib/topojson.v2.min.js"></script>
+
+<script>
+// Configuration
+const FILE_GEO  = "data/gz_2010_us_050_00_20m.json";
+const FILE_BASE = "data/asthma_pollutants.csv";
+
+const Y_VAR   = "CASTHMA_AdjPrev";
+const CAT_COL = "CASTHMA_Category";
+
+// Mapping raw model prediction (0,1,2) to category strings
+const PREDICTION_MAP = { 0: 'low', 1: 'medium', 2: 'high' };
+
+const COLORS = new Map([
+  ["low", "#ffdd57"], 
+  ["medium", "#ff7f0e"], 
+  ["high", "#d62728"]
+]);
+const COLOR_NODATA = "#eee";
+
+const POLLUTANT_CONFIG = {
+  "pred_wght_pm25":   { label: "PM2.5", hasScenario: true },
+  "pred_wght_no2":    { label: "NO2", hasScenario: true },
+  "pred_wght_o3":     { label: "O3", hasScenario: true },
+  "pred_wght_so2":    { label: "SO2", hasScenario: true },
+  "CSMOKING_AdjPrev": { label: "Smoking Rate", hasScenario: true },
+  "pollution_index":  { label: "Pollution Index", hasScenario: false }
+};
+
+const pollutantLabels = Object.fromEntries(
+    Object.entries(POLLUTANT_CONFIG).map(([key, val]) => [key, val.label])
+);
+
+// Derive the list of pollutants with scenario files from the main config object
+const SCENARIO_POLLUTANTS = Object.keys(POLLUTANT_CONFIG).filter(
+    key => POLLUTANT_CONFIG[key].hasScenario
+);
+
+const fipsToState = {
+    "01": "AL", "02": "AK", "04": "AZ", "05": "AR", "06": "CA", "08": "CO", "09": "CT", "10": "DE",
+    "11": "DC", "12": "FL", "13": "GA", "15": "HI", "16": "ID", "17": "IL", "18": "IN", "19": "IA",
+    "20": "KS", "21": "KY", "22": "LA", "23": "ME", "24": "MD", "25": "MA", "26": "MI", "27": "MN",
+    "28": "MS", "29": "MO", "30": "MT", "31": "NE", "32": "NV", "33": "NH", "34": "NJ", "35": "NM",
+    "36": "NY", "37": "NC", "38": "ND", "39": "OH", "40": "OK", "41": "OR", "42": "PA", "44": "RI",
+    "45": "SC", "46": "SD", "47": "TN", "48": "TX", "49": "UT", "50": "VT", "51": "VA", "53": "WA",
+    "54": "WV", "55": "WI", "56": "WY", "72": "PR"
+};
+
+// Setup global variables
+let geoFeatures = []; // The shapes (GeoJSON)
+let baseDataCache = []; // The original 0% data
+let mergedData = []; // The currently active merged data
+let baseDataByFips = new Map(); // Helper for looking up "Original" values for the chart
+
+// D3 selections
+const tip = d3.select("#tooltip");
+const mapContainer = d3.select("#map-container");
+const distContainer = d3.select("#distplot");
+
+// Setup map SVG
+const mapW = 800, mapH = 600;
+const mapSvg = mapContainer.append("svg")
+    .attr("viewBox", [0, 0, mapW, mapH])
+    .style("width", "100%").style("height", "100%");
+const projection = d3.geoAlbersUsa().scale(1000).translate([mapW/2, mapH/2]);
+const pathGen = d3.geoPath().projection(projection);
+const mapLayer = mapSvg.append("g").attr("class", "map-layer");
+
+// Setup chart SVG
+const distW = 400, distH = 600;
+const margin = {top: 40, right: 20, bottom: 50, left: 60};
+const innerW = distW - margin.left - margin.right;
+const innerH = distH - margin.top - margin.bottom;
+const distSvg = distContainer.append("svg")
+    .attr("viewBox", [0, 0, distW, distH])
+    .style("width", "100%").style("height", "100%");
+const distG = distSvg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
+const xScale = d3.scaleLinear().range([0, innerW]);
+const yScale = d3.scalePoint().domain(["low", "medium", "high"]).range([0, innerH]).padding(0.5);
+const xAxisG = distG.append("g").attr("transform", `translate(0,${innerH})`);
+const yAxisG = distG.append("g").call(d3.axisLeft(yScale).tickFormat(s => s.charAt(0).toUpperCase() + s.slice(1)));
+distSvg.append("text").attr("text-anchor","middle").attr("x", margin.left + innerW/2).attr("y", distH - 10)
+    .style("font-size","12px").text("Pollutant Concentration");
+const basePointsG = distG.append("g");     
+const scenarioPointsG = distG.append("g"); 
+
+// Initialization
+Promise.all([
+    d3.json(FILE_GEO),
+    d3.csv(FILE_BASE)
+]).then(([geo, data]) => {
+    
+    geoFeatures = geo.features;
+    baseDataCache = data; // Store for later use
+
+    // Pre-process base data for quick lookups
+    baseDataCache.forEach(d => {
+        const fips = String(d.CountyFIPS || d.fips || "").padStart(5, '0');
+        cleanNumbers(d);
+        baseDataByFips.set(fips, d);
+    });
+
+    // Populate pollutant dropdown
+    const choices = Object.keys(data[0]).filter(k => 
+        (k.startsWith("pred_") || k.includes("index") || k.includes("pm25") || k.includes("no2") || k.startsWith("CSMOKING")) 
+        && typeof data[0][k] === 'number'
+        && k !== "CountyFIPS" && k !== "fips"
+    );
+    
+    const sel = d3.select("#pollutant");
+    sel.selectAll("option").data(choices).enter().append("option")
+        .attr("value", d => d).text(d => pollutantLabels[d] || d);
+    if(choices.includes("pred_wght_pm25")) sel.property("value", "pred_wght_pm25");
+
+    // Initial render
+    processDataAndRender(baseDataCache);
+
+}).catch(err => console.error("Init Error:", err));
+
+// Core logic
+
+// The traffic controller
+function update() {
+    const pollutant = d3.select("#pollutant").property("value");
+    const reduction = +d3.select("#scenario").property("value");
+    const pctFilter = +d3.select("#pct").property("value");
+
+    // Update Labels
+    d3.select("#pctLabel").text(pctFilter);
+    d3.select("#scenarioLabel").text(reduction);
+
+    // Logic: Which file do we need?
+    if (reduction === 0) {
+        // CASE A: No reduction. Use the cached base file.
+        console.log("Loading Base Data (Cached)");
+        processDataAndRender(baseDataCache);
+    } else {
+        // CASE B: Reduction active. Check if valid scenario exists.
+        if (SCENARIO_POLLUTANTS.includes(pollutant)) {
+            // Construct filename: predictions_pred_wght_no2_0.8.csv
+            const factor = (1 - reduction / 100).toFixed(1); // e.g., "0.8"
+            const filename = `data/what-if/predictions_${pollutant}_${factor}.csv`;
+            
+            console.log(`Fetching scenario: ${filename}`);
+            
+            d3.csv(filename).then(scenarioData => {
+                // We need to merge the scenario values into the main `baseDataCache` so we don't
+                // lose columns needed for filtering and tooltips
+                
+                const scenarioMap = new Map();
+                scenarioData.forEach(d => {
+                    const fips = String(d.CountyFIPS || d.fips || "").padStart(5, '0');
+                    scenarioMap.set(fips, d);
+                });
+
+                // Create a new dataset for rendering by merging the scenario data
+                // into a copy of the base data
+                const updatedData = baseDataCache.map(baseRow => {
+                    const fips = String(baseRow.CountyFIPS || baseRow.fips || "").padStart(5, '0');
+                    const scenarioRow = scenarioMap.get(fips);
+                    
+                    // If a county exists in the scenario, merge the scenario's data over the base data
+                    return scenarioRow ? { ...baseRow, ...scenarioRow } : baseRow;
+                });
+
+                processDataAndRender(updatedData);
+
+            }).catch(err => {
+                console.error("Scenario file not found:", filename);
+                // Fallback to base if file missing
+                processDataAndRender(baseDataCache); 
+            });
+        } else {
+            // Pollutant doesn't support scenarios (e.g., index), fallback to base
+            console.warn("This pollutant does not have scenario files.");
+            processDataAndRender(baseDataCache);
+        }
+    }
+}
+
+// Data merger & renderer
+function processDataAndRender(csvData) {
+    const pollutant = d3.select("#pollutant").property("value");
+    const pctFilter = +d3.select("#pct").property("value");
+    const reduction = +d3.select("#scenario").property("value");
+
+    // Map the CSV data by FIPS for easy merging
+    const dataMap = new Map();
+    csvData.forEach(d => {
+        const fips = String(d.CountyFIPS || d.fips || "").padStart(5, '0');
+        cleanNumbers(d);
+        
+        // If this is a "what-if" file, it should have a 'prediction' column (0,1,2)
+        // We need to convert that to 'low','medium','high' for the colors
+        if (d.hasOwnProperty('prediction')) {
+            d[CAT_COL] = PREDICTION_MAP[d.prediction];
+        }
+        
+        dataMap.set(fips, d);
+    });
+
+    // Merge GeoJSON + CSV
+    mergedData = geoFeatures.map(feature => {
+        const fips = (feature.properties.STATE + feature.properties.COUNTY);
+        const csvRow = dataMap.get(fips);
+        return {
+            ...feature,
+            properties: {
+                ...feature.properties,
+                ...(csvRow || {}),
+                hasData: !!csvRow
+            }
+        };
+    });
+
+    // C. Render
+    renderVisuals(pollutant, pctFilter, reduction);
+}
+
+// Visualization logic
+function renderVisuals(pollutant, pctFilter, reduction) {
+    
+    // Filter logic
+    const allPrev = mergedData
+        .map(d => d.properties[Y_VAR])
+        .filter(v => v != null && !isNaN(v));
+    const threshold = percentile(allPrev, pctFilter);
+
+    const activeData = [];
+
+    // Update map
+    // Need to re-bind data to paths
+    const paths = mapLayer.selectAll("path").data(mergedData);
+
+    paths.enter().append("path") // Handle new paths if any
+        .attr("d", pathGen)
+        .attr("class", "county-path")
+        .merge(paths) // Update existing
+        .attr("fill", d => {
+            const p = d.properties;
+            const isActive = p.hasData && p[Y_VAR] >= threshold && p[pollutant] != null;
+            
+            if(isActive) {
+                activeData.push(d);
+                const cat = String(p[CAT_COL] || "").toLowerCase();
+                return COLORS.get(cat) || COLOR_NODATA;
+            } 
+            return COLOR_NODATA;
+        })
+        .on("mouseover", function(d) {
+            if(d.properties.hasData && d.properties[pollutant] != null) {
+                d3.select(this).style("stroke", "#333").style("stroke-width", "1.5px");
+                showTooltip(d3.event, d);
+            }
+        })
+        .on("mousemove", function(d) { if(d.properties.hasData) moveTooltip(d3.event); })
+        .on("mouseout", function(d) {
+            d3.select(this).style("stroke", "#fff").style("stroke-width", "0.2px");
+            hideTooltip();
+        });
+
+    d3.select("#shownCount").text(activeData.length);
+
+    // --- Update Chart ---
+    updateDistPlot(activeData, pollutant, reduction);
+}
+
+function updateDistPlot(activeData, pollutant, reduction) {
+    // Calculate domains
+    const isScenario = reduction > 0;
+
+    // Get values for X axis scale
+    const currentVals = activeData.map(d => {
+        const fips = d.properties.STATE + d.properties.COUNTY;
+        const baseRow = baseDataByFips.get(fips);
+        return baseRow ? baseRow[pollutant] : null;
+    }).filter(v => v != null);
+
+    const futureVals = activeData.map(d => d.properties[pollutant]); // The loaded data already has the reduced values if isScenario is true
+
+    const allVals = currentVals.concat(futureVals);
+    const extent = d3.extent(allVals);
+    
+    xScale.domain([extent[0]||0, extent[1]||1]);
+    xAxisG.transition().call(d3.axisBottom(xScale).ticks(5));
+
+    // Gray dots (baseline reference)
+    const baseDots = basePointsG.selectAll("circle.base")
+        .data(activeData, d => d.properties.STATE + d.properties.COUNTY);
+    
+    baseDots.exit().remove();
+    baseDots.enter().append("circle")
+        .attr("class", "base")
+        .attr("r", 2)
+        .attr("fill", "#ddd")
+        .merge(baseDots)
+        .attr("cx", d => {
+            const fips = d.properties.STATE + d.properties.COUNTY;
+            const baseRow = baseDataByFips.get(fips);
+            const val = baseRow ? baseRow[pollutant] : 0;
+            return xScale(val) + jitter(5);
+        })
+        .attr("cy", d => {
+            const cat = String(d.properties[CAT_COL] || "").toLowerCase();
+            return yScale(cat) + yScale.bandwidth()/2 + jitter(10);
+        });
+
+    // Colored dots (scenario / current)
+    const scenDots = scenarioPointsG.selectAll("circle.scen")
+        .data(activeData, d => d.properties.STATE + d.properties.COUNTY);
+
+    scenDots.exit().remove();
+    scenDots.enter().append("circle")
+        .attr("class", "scen")
+        .attr("r", 3)
+        .attr("opacity", 0.8)
+        .on("mouseover", function(d) { showTooltip(d3.event, d); })
+        .on("mouseout", hideTooltip)
+        .merge(scenDots)
+        .transition().duration(500)
+        .attr("fill", d => {
+            const cat = String(d.properties[CAT_COL] || "").toLowerCase();
+            return COLORS.get(cat) || "#888";
+        })
+        .attr("cx", d => {
+            // Since we loaded the specific file, the property is already the Reduced value
+            return xScale(d.properties[pollutant]) + jitter(5);
+        })
+        .attr("cy", d => {
+            const cat = String(d.properties[CAT_COL] || "").toLowerCase();
+            return yScale(cat) + yScale.bandwidth()/2 + jitter(10);
+        });
+}
+
+// Helpers
+function cleanNumbers(obj) {
+    for(let key in obj) {
+        if(!isNaN(obj[key]) && obj[key] !== "") obj[key] = +obj[key];
+    }
+}
+
+function percentile(arr, p) {
+    if(!arr.length) return 0;
+    const s = arr.slice().sort((a,b)=>a-b);
+    const r = (p/100) * (s.length - 1);
+    return s[Math.floor(r)];
+}
+
+function jitter(width = 10) { return (Math.random() - 0.5) * width; }
+
+// Tooltip
+function showTooltip(event, d) {
+    const p = d.properties;
+    const state = fipsToState[p.STATE] || '';
+    const cat = (p[CAT_COL] || 'N/A');
+    const displayCat = cat.charAt(0).toUpperCase() + cat.slice(1);
+    
+    tip.html(`<strong>${p.NAME}, ${state}</strong><br>Risk: <b>${displayCat}</b>`)
+       .style("opacity", 1)
+       .style("left", (event.pageX + 15) + "px")
+       .style("top", (event.pageY - 28) + "px");
+}
+function moveTooltip(event) {
+    tip.style("left", (event.pageX + 15) + "px").style("top", (event.pageY - 28) + "px");
+}
+function hideTooltip() { tip.style("opacity", 0); }
+
+// Listeners
+d3.select("#pollutant").on("change", update);
+d3.select("#pct").on("change", update);
+d3.select("#scenario").on("change", update);
+
+</script>
+</body>
+</html>
