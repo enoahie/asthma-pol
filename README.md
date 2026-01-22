@@ -5,12 +5,12 @@ An interactive, ML‑powered dashboard that turns county‑level air quality int
 ## Live Demo
 - https://enoahie.github.io/asthma-pol/
 
-## Run Locally (Preview)
+## Run Locally
 1) From repo root:
 ```bash
 python3 -m http.server 8000
 ```
-2) Open http://localhost:8000/ (redirects to `src/visualization.html`)
+2) Open http://localhost:8000/
 3) Use the controls:
 - Target Variable: select PM2.5, NO2, O3, SO2, Smoking, or Index.
 - Filter: Asthma Percentile: show counties at or above selected prevalence.
@@ -28,10 +28,39 @@ It features a dynamic "What-If" scenario engine that allows users to simulate th
 impact of reducing specific pollutants (by 10% to 50%) on asthma risk, visualizing 
 potential health outcomes based on predictive model data.
 
-# INSTALLATION
+## How It Works (High Level)
+- It brings together three pieces of information for every county: air pollution levels, health estimates about asthma and smoking, and the county boundaries.
+- A trained model classifies each county as Low, Medium, or High asthma risk based on those inputs.
+- The app includes precomputed “what‑if” versions of the data that answer: “What would risk look like if this pollutant (or smoking) were reduced by 10–50%?”
+- The website shows a color‑coded map and a simple chart. Use the dropdown and sliders to explore; the view updates instantly.
 
-### PREREQUISITES
-- Python 3.x and the following libraries libraries:
+## How It Works (Low Level)
+- When the page opens, it loads the county shapes and the main data file and draws the map and chart.
+- The “Target Variable” dropdown chooses which factor the side chart displays and which “what‑if” files the slider will use.
+- The “Filter: Asthma Percentile” slider focuses the map on counties with higher measured asthma prevalence so patterns are easier to see.
+- The “What‑If Reduction (%)” slider looks up a pre‑made file (for the selected variable and reduction level) and updates each county’s risk category on the map and in the chart.
+- Counties shown in gray are either filtered out by your settings or don’t have data for the selected view.
+- If a matching “what‑if” file isn’t available, the site falls back to the original data.
+- Data files live in `src/data/` (main file) and `src/data/what-if/` (scenario files). The county shapes file is also in `src/data/`.
+
+## Data Preparation and Modeling
+- Data preparation
+  - Sources: CACES pollutant models (PM2.5, NO2, O3, SO2), CDC PLACES (asthma, smoking), and 2010 county boundaries (GeoJSON).
+  - Join: counties matched via FIPS codes; numbers cleaned/standardized; Alaska/Hawaii excluded where coverage was limited.
+  - Features: pollutant indicators (e.g., `pred_wght_pm25/no2/o3/so2`), smoking rate (`CSMOKING_AdjPrev`), and a composite index where available.
+- Labeling
+  - Target: asthma prevalence (`CASTHMA_AdjPrev`) binned into tertiles → Low / Medium / High for interpretable classes.
+- Training and evaluation
+  - Split: 70/30 train–test; 5‑fold cross‑validation on training data; metrics: accuracy and weighted F1.
+  - Models compared: RandomForest, GradientBoosting, KNeighbors, LogisticRegression, AdaBoost, MLP, DecisionTree, SGD, and a VotingClassifier (RF + KNN + GB).
+  - Result: VotingClassifier ≈ 0.68 accuracy/F1; dummy (“guessing”) baseline ≈ 0.34.
+- Why this model
+  - Handles non‑linear tabular patterns, remains stable across regions, and outputs clear 3‑level risk categories suited to a choropleth.
+
+# Installation
+
+### Prerequisites
+- Python 3.x and the following libraries:
   - pandas
   - geopandas
   - numpy
@@ -40,44 +69,9 @@ potential health outcomes based on predictive model data.
   - imblearn
 - A modern web browser (Chrome, Firefox, Safari, Edge)
 
-### DATA SOURCES
+### Data Sources
 
 1. CACES LUR Data for 2017-2019
-   1. Navigate to the [CACES Data Download Page](https://www.caces.us/data).
-   2. Enter your email and organization.
-   3. Select "LUR", "National", "County", "O3", "SO2", "NO2", "PM2.5", "2017-2019" and click "GET DATA".
-   4. You should receive an email with a data download shortly. Make sure to check your junk folder.
 2. PLACES County Data from 2020 & 2021 Releases
-   1. 2020 Data: Navigate to [PLACES: County Data (GIS Friendly Format), 2020 release](https://data.cdc.gov/500-Cities-Places/PLACES-County-Data-GIS-Friendly-Format-2020-releas/mssc-ksj7/about_data), click "Export", make sure "CSV" is selected for "Export format", click "Download".
-   2. 2021 Data: Navigate to [PLACES: County Data (GIS Friendly Format), 2021 release](https://data.cdc.gov/500-Cities-Places/PLACES-County-Data-GIS-Friendly-Format-2021-releas/kmvs-jkvx/about_data), click "Export", make sure "CSV" is selected for "Export format", click "Download".
 3. 2010 US County Shapefile
-   1. Navigate to [this US Census Bureau link](https://www2.census.gov/geo/tiger/TIGER2010/COUNTY/2010/tl_2010_us_county10.zip) and the download will start.
 4. 2010 US County GeoJSON
-   1. Navigate to [this site](https://eric.clst.org/tech/usgeojson/), click on "GeoJSON" for the "US Counties" and "20m" cell.
-
-### DATA PROCESSING
-
-If you would like to process the raw data, follow the below steps:
-
-1. Go to `asthma-pol/src/data/` and place all of the files you downloaded from the previous section. Make sure to extract the files from `tl_2010_us_county10.zip`.
-2. Go back to to `asthma-pol/src/` and run all of the cells in `build_dataset_rf.ipynb`. This will create all of the data that the visualization needs.
-
-# EXECUTION / QUICK START
-
-1. Navigate to `/asthma-pol/` and run `start_server.bat` (Windows) or `python3 -m http.server 8000`.
-2. Open http://localhost:8000/ → redirects to the visualization.
-3. Use “Target Variable”, “Filter: Asthma Percentile”, and “What If Reduction (%)”.
-
-## How It Works (High Level)
-- Data: CACES pollutant models (PM2.5, NO2, O3, SO2), CDC PLACES (asthma, smoking), county GeoJSON; joined by FIPS.
-- ML: 3‑class classification of asthma prevalence (tertiles). scikit‑learn model sweep with 5‑fold CV; VotingClassifier (RF + KNN + GB) ≈ 0.68 accuracy/F1; dummy baseline ≈ 0.34.
-- Scenarios: Offline generation of reduced‑feature predictions (0.5–0.9 multipliers) saved as CSVs (`src/data/what-if/*.csv`), each with `prediction` (0/1/2).
-- Frontend: Static HTML/CSS + D3 v5; TopoJSON map; CSVs loaded client‑side; county merge by FIPS; choropleth + distribution plot; percentile filter and tooltips.
-
-## Deploy to GitHub Pages
-1) Push this repo to GitHub.
-2) In GitHub → Settings → Pages:
-   - Source: Deploy from a branch
-   - Branch: `main` (or `master`), Folder: `/ (root)`
-3) Open `https://<your-username>.github.io/<repo>/` (root `index.html` redirects to `src/visualization.html`).
-4) Optional: add the live link above in “Live Demo”.
