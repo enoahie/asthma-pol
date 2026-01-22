@@ -57,19 +57,18 @@ potential health outcomes based on predictive model data.
 - Why this model
   - Handles non‑linear tabular patterns, remains stable across regions, and outputs clear 3‑level risk categories suited to a choropleth.
 
-# Installation
+## Libraries & Technologies
+- Data & ML
+  - Jupyter Notebook (`src/build_dataset_rf.ipynb`), pandas, numpy, scikit‑learn, imblearn
+  - geopandas, matplotlib during exploration/EDA
+  - Models tested: RandomForest, GradientBoosting, KNeighbors, LogisticRegression, AdaBoost, MLP, DecisionTree, SGD; selected VotingClassifier (RF + KNN + GB)
+- Visualization/UI
+  - HTML/CSS with D3.js v5 and TopoJSON
+  - Choropleth map (GeoAlbers USA), percentile filter, distribution plot, tooltips
+- Data formats
+  - CSV (baseline and scenario predictions), GeoJSON (counties), TopoJSON (topology)
 
-### Prerequisites
-- Python 3.x and the following libraries:
-  - pandas
-  - geopandas
-  - numpy
-  - matplotlib
-  - scikit-learn
-  - imblearn
-- A modern web browser (Chrome, Firefox, Safari, Edge)
-
-### Data Sources
+## Data Sources
 
 1. CACES LUR Data for 2017-2019
 2. PLACES County Data from 2020 & 2021 Releases
