@@ -17,7 +17,7 @@ python3 -m http.server 8000
 - “What If” Reduction (%): apply 10–50% reductions (loads precomputed scenario predictions).
 - Hover: see county/state and risk category. “Counties shown” updates live.
 
-# DESCRIPTION
+# Description
 
 This project is a data visualization tool designed to explore the
 relationship between environmental quality and public health. It provides an 
